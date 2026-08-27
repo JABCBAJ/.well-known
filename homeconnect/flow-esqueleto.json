@@ -1,0 +1,330 @@
+[
+  {
+    "id": "hc_horno_tab",
+    "type": "tab",
+    "label": "Home Connect - Horno Bosch",
+    "disabled": false,
+    "info": "Esqueleto de integracion Home Connect -> Node-RED.\n\n1. Rellena las variables de entorno de esta pestana (boton derecho sobre la pestana -> Propiedades -> Variables de entorno).\n2. Habilita el context store de tipo `file` en settings.js.\n3. Haz UNA VEZ el Device Flow a mano y guarda el resultado:\n   global.set('hc_tokens', {access_token:'...', refresh_token:'...'}, 'file')\n4. Despliega. El estado queda en global.horno.\n\nSIN PROBAR contra un horno real: revisalo antes de usarlo en produccion.",
+    "env": [
+      {
+        "name": "HC_CLIENT_ID",
+        "value": "",
+        "type": "str"
+      },
+      {
+        "name": "HC_CLIENT_SECRET",
+        "value": "",
+        "type": "str"
+      },
+      {
+        "name": "HC_HAID",
+        "value": "",
+        "type": "str"
+      }
+    ]
+  },
+  {
+    "id": "hc_comment",
+    "type": "comment",
+    "z": "hc_horno_tab",
+    "name": "LEEME: configura HC_CLIENT_ID / HC_HAID en las propiedades de la pestana",
+    "info": "Los secretos NO van en git. Usa variables de entorno del proceso o de la pestana.",
+    "x": 320,
+    "y": 40,
+    "wires": []
+  },
+  {
+    "id": "hc_inject",
+    "type": "inject",
+    "z": "hc_horno_tab",
+    "name": "Arranque + cada 12 h",
+    "props": [
+      {
+        "p": "payload"
+      }
+    ],
+    "repeat": "43200",
+    "crontab": "",
+    "once": true,
+    "onceDelay": "5",
+    "topic": "",
+    "payload": "",
+    "payloadType": "date",
+    "x": 170,
+    "y": 120,
+    "wires": [
+      [
+        "hc_refresh"
+      ]
+    ]
+  },
+  {
+    "id": "hc_refresh",
+    "type": "function",
+    "z": "hc_horno_tab",
+    "name": "Preparar refresco de token",
+    "func": "// Prepara la petición de refresco de token.\n// Requiere las variables de entorno HC_CLIENT_ID (y HC_CLIENT_SECRET si tu app la tiene).\nconst t = global.get(\"hc_tokens\", \"file\") || {};\nif (!t.refresh_token) {\n    node.status({fill: \"red\", shape: \"ring\", text: \"sin refresh_token\"});\n    node.warn(\"No hay refresh_token guardado. Ejecuta una vez el Device Flow a mano \" +\n              \"y guarda el resultado con: global.set('hc_tokens', {...}, 'file')\");\n    return null;\n}\nconst body = {\n    grant_type: \"refresh_token\",\n    refresh_token: t.refresh_token,\n    client_id: env.get(\"HC_CLIENT_ID\")\n};\nconst secret = env.get(\"HC_CLIENT_SECRET\");\nif (secret) { body.client_secret = secret; }\n\nmsg.method = \"POST\";\nmsg.url = \"https://api.home-connect.com/security/oauth/token\";\nmsg.headers = {\"Content-Type\": \"application/x-www-form-urlencoded\"};\nmsg.payload = new URLSearchParams(body).toString();\nreturn msg;\n",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 430,
+    "y": 120,
+    "wires": [
+      [
+        "hc_http_token"
+      ]
+    ]
+  },
+  {
+    "id": "hc_http_token",
+    "type": "http request",
+    "z": "hc_horno_tab",
+    "name": "POST /security/oauth/token",
+    "method": "use",
+    "ret": "obj",
+    "paytoqs": "ignore",
+    "url": "",
+    "tls": "",
+    "persist": false,
+    "proxy": "",
+    "insecureHTTPParser": false,
+    "authType": "",
+    "senderr": false,
+    "headers": [],
+    "x": 700,
+    "y": 120,
+    "wires": [
+      [
+        "hc_save"
+      ]
+    ]
+  },
+  {
+    "id": "hc_save",
+    "type": "function",
+    "z": "hc_horno_tab",
+    "name": "Guardar tokens (context 'file')",
+    "func": "// Guarda los tokens en el context store de fichero (sobreviven a reinicios).\n// OJO: el refresh_token rota en cada refresco; hay que guardar siempre el ultimo.\nconst r = msg.payload;\nif (!r || !r.access_token) {\n    node.status({fill: \"red\", shape: \"dot\", text: \"refresco fallido\"});\n    node.error(\"Refresco de token fallido: \" + JSON.stringify(r), msg);\n    return [null, msg];\n}\nconst previo = global.get(\"hc_tokens\", \"file\") || {};\nconst t = {\n    access_token: r.access_token,\n    refresh_token: r.refresh_token || previo.refresh_token,\n    expires_at: Date.now() + ((r.expires_in || 86400) * 1000)\n};\nglobal.set(\"hc_tokens\", t, \"file\");\nnode.status({fill: \"green\", shape: \"dot\", text: \"token ok hasta \" + new Date(t.expires_at).toLocaleString()});\nreturn [{topic: \"sse/control\", payload: \"start\"}, null];\n",
+    "outputs": 2,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 980,
+    "y": 120,
+    "wires": [
+      [
+        "hc_sse"
+      ],
+      [
+        "hc_dbg_err"
+      ]
+    ]
+  },
+  {
+    "id": "hc_dbg_err",
+    "type": "debug",
+    "z": "hc_horno_tab",
+    "name": "error auth",
+    "active": true,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": false,
+    "complete": "payload",
+    "targetType": "msg",
+    "statusVal": "",
+    "statusType": "auto",
+    "x": 1230,
+    "y": 60,
+    "wires": []
+  },
+  {
+    "id": "hc_sse",
+    "type": "function",
+    "z": "hc_horno_tab",
+    "name": "SSE Home Connect (reconexion + backoff)",
+    "func": "// Cliente SSE de Home Connect con reconexion, backoff y reciclado periodico.\n// Entrada: msg.payload = \"start\" | \"stop\"\n// Salida 1: eventos del horno   Salida 2: mensajes de control (refresco / resync)\n// Requiere: pestaña \"Setup\" -> Modules -> https  (variable: https)\n\nconst MAX_BACKOFF = 60000;      // tope de reintento\nconst RECYCLE_MS  = 15 * 60000; // reciclar el stream cada 15 min\nconst KA_TIMEOUT  = 150000;     // sin keep-alive 2.5 min -> reconectar\n\nfunction bump() {\n    const g = (context.get(\"gen\") || 0) + 1;\n    context.set(\"gen\", g);\n    return g;\n}\nfunction clearTimers() {\n    [\"retryTimer\", \"kaTimer\", \"recycleTimer\"].forEach(function (k) {\n        const t = context.get(k);\n        if (t) { clearTimeout(t); }\n        context.set(k, null);\n    });\n}\nfunction destroyReq() {\n    const req = context.get(\"req\");\n    if (req) { try { req.destroy(); } catch (e) { /* ignorar */ } }\n    context.set(\"req\", null);\n}\nfunction stop() {\n    bump();\n    clearTimers();\n    destroyReq();\n    node.status({fill: \"grey\", shape: \"ring\", text: \"parado\"});\n}\nfunction reconnect(motivo) {\n    bump();\n    clearTimers();\n    destroyReq();\n    const b = context.get(\"backoff\") || 1000;\n    node.status({fill: \"yellow\", shape: \"ring\", text: \"reintento en \" + Math.round(b / 1000) + \"s (\" + motivo + \")\"});\n    context.set(\"backoff\", Math.min(b * 2, MAX_BACKOFF));\n    context.set(\"retryTimer\", setTimeout(connect, b));\n}\n\nfunction connect() {\n    bump();\n    clearTimers();\n    destroyReq();\n    const g = context.get(\"gen\");\n    const vivo = function () { return g === context.get(\"gen\"); };\n\n    const tokens = global.get(\"hc_tokens\", \"file\") || {};\n    const haId = env.get(\"HC_HAID\");\n    if (!tokens.access_token || !haId) {\n        node.status({fill: \"red\", shape: \"ring\", text: \"falta token o HC_HAID\"});\n        return reconnect(\"sin credenciales\");\n    }\n\n    const req = https.request({\n        hostname: \"api.home-connect.com\",\n        path: \"/api/homeappliances/\" + haId + \"/events\",\n        method: \"GET\",\n        headers: {\n            \"Authorization\": \"Bearer \" + tokens.access_token,\n            \"Accept\": \"text/event-stream\"\n        }\n    }, function (res) {\n        if (!vivo()) { res.resume(); return; }\n        if (res.statusCode === 401) {\n            res.resume();\n            node.send([null, {topic: \"hc/auth\", payload: \"refresh\"}]);\n            return reconnect(\"401 token caducado\");\n        }\n        if (res.statusCode !== 200) {\n            res.resume();\n            return reconnect(\"HTTP \" + res.statusCode);\n        }\n\n        context.set(\"backoff\", 1000);\n        node.status({fill: \"green\", shape: \"dot\", text: \"conectado\"});\n        // Resincronizar: los cambios ocurridos mientras estabamos caidos no se reenvian.\n        node.send([null, {topic: \"hc/resync\", payload: true}]);\n\n        const armKA = function () {\n            const t = context.get(\"kaTimer\");\n            if (t) { clearTimeout(t); }\n            context.set(\"kaTimer\", setTimeout(function () {\n                if (vivo()) { reconnect(\"sin keep-alive\"); }\n            }, KA_TIMEOUT));\n        };\n        armKA();\n        context.set(\"recycleTimer\", setTimeout(function () {\n            if (vivo()) { reconnect(\"reciclado periodico\"); }\n        }, RECYCLE_MS));\n\n        let buf = \"\";\n        res.setEncoding(\"utf8\");\n        res.on(\"data\", function (chunk) {\n            if (!vivo()) { return; }\n            armKA();\n            buf += chunk;\n            let idx;\n            while ((idx = buf.indexOf(\"\\n\\n\")) >= 0) {\n                const bloque = buf.slice(0, idx);\n                buf = buf.slice(idx + 2);\n                const ev = {event: \"\", data: \"\", id: \"\"};\n                bloque.split(\"\\n\").forEach(function (linea) {\n                    if (linea.indexOf(\"event:\") === 0) { ev.event = linea.slice(6).trim(); }\n                    else if (linea.indexOf(\"data:\") === 0) { ev.data += linea.slice(5).trim(); }\n                    else if (linea.indexOf(\"id:\") === 0) { ev.id = linea.slice(3).trim(); }\n                });\n                if (!ev.event || ev.event === \"KEEP-ALIVE\") { continue; }\n                let payload = null;\n                if (ev.data) {\n                    try { payload = JSON.parse(ev.data); } catch (e) { payload = ev.data; }\n                }\n                node.send([{topic: \"homeconnect/\" + ev.event, event: ev.event, payload: payload}, null]);\n            }\n        });\n        res.on(\"end\", function () { if (vivo()) { reconnect(\"stream cerrado\"); } });\n        res.on(\"error\", function (e) { if (vivo()) { reconnect(\"error stream: \" + e.message); } });\n    });\n\n    req.on(\"error\", function (e) { if (vivo()) { reconnect(\"error peticion: \" + e.message); } });\n    req.end();\n    context.set(\"req\", req);\n}\n\nconst cmd = (msg && msg.payload) || \"start\";\nif (cmd === \"stop\") { stop(); }\nelse { context.set(\"backoff\", 1000); connect(); }\nreturn null;\n",
+    "outputs": 2,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "// Cierre limpio al desplegar o parar Node-RED: evita dejar canales SSE zombis\n// (Home Connect solo permite 10 simultaneos por cuenta).\ncontext.set(\"gen\", (context.get(\"gen\") || 0) + 1);\n[\"retryTimer\", \"kaTimer\", \"recycleTimer\"].forEach(function (k) {\n    const t = context.get(k);\n    if (t) { clearTimeout(t); }\n    context.set(k, null);\n});\nconst req = context.get(\"req\");\nif (req) { try { req.destroy(); } catch (e) { /* ignorar */ } }\ncontext.set(\"req\", null);\n",
+    "libs": [
+      {
+        "var": "https",
+        "module": "https"
+      }
+    ],
+    "x": 1000,
+    "y": 220,
+    "wires": [
+      [
+        "hc_estado"
+      ],
+      [
+        "hc_switch"
+      ]
+    ]
+  },
+  {
+    "id": "hc_switch",
+    "type": "switch",
+    "z": "hc_horno_tab",
+    "name": "control",
+    "property": "topic",
+    "propertyType": "msg",
+    "rules": [
+      {
+        "t": "eq",
+        "v": "hc/auth",
+        "vt": "str"
+      },
+      {
+        "t": "eq",
+        "v": "hc/resync",
+        "vt": "str"
+      }
+    ],
+    "checkall": "true",
+    "repair": false,
+    "outputs": 2,
+    "x": 1000,
+    "y": 320,
+    "wires": [
+      [
+        "hc_refresh"
+      ],
+      [
+        "hc_resync"
+      ]
+    ]
+  },
+  {
+    "id": "hc_resync",
+    "type": "function",
+    "z": "hc_horno_tab",
+    "name": "Preparar GET /status + /settings",
+    "func": "// Tras cada (re)conexion: leer estado y settings actuales, porque los cambios\n// ocurridos mientras el stream estaba caido no se reenvian.\nconst token = (global.get(\"hc_tokens\", \"file\") || {}).access_token;\nconst haId = env.get(\"HC_HAID\");\nif (!token || !haId) { return null; }\nconst base = \"https://api.home-connect.com/api/homeappliances/\" + haId;\nconst cab = {\"Authorization\": \"Bearer \" + token, \"Accept\": \"application/vnd.bsh.sdk.v1+json\"};\nreturn [\n    {method: \"GET\", url: base + \"/status\",   headers: cab, payload: null},\n    {method: \"GET\", url: base + \"/settings\", headers: cab, payload: null}\n];\n",
+    "outputs": 2,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 700,
+    "y": 380,
+    "wires": [
+      [
+        "hc_http_state"
+      ],
+      [
+        "hc_http_state"
+      ]
+    ]
+  },
+  {
+    "id": "hc_http_state",
+    "type": "http request",
+    "z": "hc_horno_tab",
+    "name": "GET estado actual",
+    "method": "use",
+    "ret": "obj",
+    "paytoqs": "ignore",
+    "url": "",
+    "tls": "",
+    "persist": false,
+    "proxy": "",
+    "insecureHTTPParser": false,
+    "authType": "",
+    "senderr": false,
+    "headers": [],
+    "x": 990,
+    "y": 380,
+    "wires": [
+      [
+        "hc_norm"
+      ]
+    ]
+  },
+  {
+    "id": "hc_norm",
+    "type": "function",
+    "z": "hc_horno_tab",
+    "name": "Normalizar a formato de evento",
+    "func": "// Convierte la respuesta de /status o /settings al mismo formato que los eventos SSE.\nconst d = (msg.payload && msg.payload.data) || {};\nconst items = d.status || d.settings || [];\nif (!items.length) { return null; }\nreturn {event: \"RESYNC\", payload: {items: items}};\n",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 1250,
+    "y": 380,
+    "wires": [
+      [
+        "hc_estado"
+      ]
+    ]
+  },
+  {
+    "id": "hc_estado",
+    "type": "function",
+    "z": "hc_horno_tab",
+    "name": "Maquina de estados del horno",
+    "func": "// Maquina de estados del horno -> global.horno\n// Entrada: eventos SSE (msg.event + msg.payload.items) o resync (/status, /settings)\n// Salida 1: estado completo   Salida 2: solo transiciones (para la logica de cargas)\n\n// Potencias ESTIMADAS en W. Calibrar con un medidor real la primera semana.\nconst P = {\n    STANDBY:     3,\n    CALENTANDO:  3000,\n    MANTENIENDO: 1400,\n    PIROLISIS:   3000\n};\n\nconst st = global.get(\"horno\") || {\n    conectado: false, encendido: false, estado: \"APAGADO\",\n    potenciaEstimadaW: 0, fuente: \"estimado\"\n};\nconst anterior = st.estado;\n\nif (msg.event === \"CONNECTED\")    { st.conectado = true; }\nif (msg.event === \"DISCONNECTED\") { st.conectado = false; }\n\nconst items = (msg.payload && msg.payload.items) || [];\nitems.forEach(function (it) {\n    const v = it.value;\n    switch (it.key) {\n        case \"BSH.Common.Setting.PowerState\":\n            st.encendido = /\\.On$/.test(String(v));\n            if (!st.encendido) { st.preheatHecho = false; st.programa = null; }\n            break;\n        case \"BSH.Common.Status.OperationState\":\n            st.operationState = String(v).split(\".\").pop();\n            break;\n        case \"BSH.Common.Status.DoorState\":\n            st.puerta = String(v).split(\".\").pop();\n            break;\n        case \"BSH.Common.Root.ActiveProgram\":\n        case \"BSH.Common.Root.SelectedProgram\":\n            st.programa = v;\n            st.preheatHecho = false;\n            break;\n        case \"BSH.Common.Option.RemainingProgramTime\":\n            st.restanteS = v;\n            st.finEstimado = new Date(Date.now() + (v * 1000)).toISOString();\n            break;\n        case \"BSH.Common.Option.ProgramProgress\":\n            st.progreso = v;\n            break;\n        case \"Cooking.Oven.Status.CurrentCavityTemperature\":\n            st.temperaturaCavidad = v;\n            break;\n        case \"Cooking.Oven.Option.SetpointTemperature\":\n            st.temperaturaObjetivo = v;\n            break;\n        case \"Cooking.Oven.Event.PreheatFinished\":\n        case \"Cooking.Oven.Event.RegularPreheatFinished\":\n            if (/Present$/.test(String(v))) { st.preheatHecho = true; }\n            break;\n        case \"BSH.Common.Event.ProgramFinished\":\n            if (/Present$/.test(String(v))) { st.preheatHecho = false; }\n            break;\n    }\n});\n\n// --- Derivar estado ---\nconst op = st.operationState || \"Inactive\";\nconst pirolisis = /Pyrolysis|Cleaning/i.test(String(st.programa || \"\"));\n\nif (!st.encendido)                 { st.estado = \"APAGADO\"; }\nelse if (op === \"DelayedStart\")    { st.estado = \"DIFERIDO\"; }\nelse if (op === \"Run\")             { st.estado = st.preheatHecho ? \"MANTENIENDO\" : \"CALENTANDO\"; }\nelse if (op === \"Pause\")           { st.estado = \"PAUSA\"; }\nelse if (op === \"Finished\")        { st.estado = \"FIN\"; }\nelse                               { st.estado = \"EN_ESPERA\"; }\n\n// --- Derivar potencia estimada ---\nif (st.estado === \"CALENTANDO\")       { st.potenciaEstimadaW = pirolisis ? P.PIROLISIS : P.CALENTANDO; }\nelse if (st.estado === \"MANTENIENDO\") { st.potenciaEstimadaW = pirolisis ? P.PIROLISIS : P.MANTENIENDO; }\nelse                                  { st.potenciaEstimadaW = P.STANDBY; }\n\n// Fallback de seguridad: si la nube se cae con el horno encendido, asumir el peor\n// caso en vez de dar por hecho que no consume.\nif (!st.conectado && st.encendido) {\n    st.potenciaEstimadaW = P.CALENTANDO;\n    st.fuente = \"estimado-degradado\";\n} else {\n    st.fuente = \"estimado\";\n}\n\nst.ts = Date.now();\nglobal.set(\"horno\", st);\n\nconst salidaEstado = {topic: \"horno/estado\", payload: st};\nconst transicion = (anterior !== st.estado)\n    ? {topic: \"horno/transicion\", payload: {de: anterior, a: st.estado, estado: st}}\n    : null;\n\nnode.status({fill: st.estado === \"APAGADO\" ? \"grey\" : \"green\", shape: \"dot\",\n             text: st.estado + \" ~\" + st.potenciaEstimadaW + \"W\"});\nreturn [salidaEstado, transicion];\n",
+    "outputs": 2,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 1360,
+    "y": 220,
+    "wires": [
+      [
+        "hc_dbg_estado"
+      ],
+      [
+        "hc_dbg_trans"
+      ]
+    ]
+  },
+  {
+    "id": "hc_dbg_estado",
+    "type": "debug",
+    "z": "hc_horno_tab",
+    "name": "global.horno",
+    "active": true,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": false,
+    "complete": "payload",
+    "targetType": "msg",
+    "statusVal": "",
+    "statusType": "auto",
+    "x": 1640,
+    "y": 180,
+    "wires": []
+  },
+  {
+    "id": "hc_dbg_trans",
+    "type": "debug",
+    "z": "hc_horno_tab",
+    "name": "TRANSICION -> aqui engancha la gestion de cargas",
+    "active": true,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": false,
+    "complete": "payload",
+    "targetType": "msg",
+    "statusVal": "",
+    "statusType": "auto",
+    "x": 1740,
+    "y": 260,
+    "wires": []
+  }
+]
